@@ -49,13 +49,19 @@ class OutlookNotify < Formula
                  "Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python"
     site_packages = libexec/"lib/python3.13/site-packages"
 
-    # Write a bootstrap that hardcodes our site-packages into sys.path, then
-    # runs the main script as __main__ — no reliance on PYTHONPATH at all.
+    # Bootstrap hardcodes site-packages into sys.path (no PYTHONPATH reliance),
+    # then pre-imports PyObjCTools into sys.modules so that when runpy hands off
+    # to the main script, rumps finds the correct namespace package already cached
+    # rather than re-resolving it from a potentially ambiguous namespace path.
     (pkgshare/"bootstrap.py").write <<~PY
       import sys
       _site = "#{site_packages}"
       if _site not in sys.path:
           sys.path.insert(0, _site)
+      # Pre-cache PyObjCTools in sys.modules before runpy creates a new module
+      # namespace — prevents namespace package re-resolution under launchd.
+      import PyObjCTools
+      from PyObjCTools import AppHelper  # noqa: F401
       import runpy
       runpy.run_path("#{pkgshare}/outlook-notify.py", run_name="__main__")
     PY

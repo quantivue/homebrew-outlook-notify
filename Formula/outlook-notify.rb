@@ -10,17 +10,15 @@ class OutlookNotify < Formula
   depends_on "python@3.13"
   depends_on :macos
 
-  # pip install rumps pyobjc-core pyobjc-framework-Cocoa
-  # shasum -a 256 on the .tar.gz from PyPI
-
+  # Pre-compiled universal2 wheels — no Xcode required
   resource "pyobjc-core" do
-    url "https://files.pythonhosted.org/packages/source/p/pyobjc-core/pyobjc_core-12.1.tar.gz"
-    sha256 "2bb3903f5387f72422145e1466b3ac3f7f0ef2e9960afa9bcd8961c5cbf8bd21"
+    url "https://files.pythonhosted.org/packages/cp313/p/pyobjc_core/pyobjc_core-12.1-cp313-cp313-macosx_10_13_universal2.whl"
+    sha256 "01c0cf500596f03e21c23aef9b5f326b9fb1f8f118cf0d8b66749b6cf4cbb37a"
   end
 
   resource "pyobjc-framework-Cocoa" do
-    url "https://files.pythonhosted.org/packages/source/p/pyobjc-framework-Cocoa/pyobjc_framework_cocoa-12.1.tar.gz"
-    sha256 "5556c87db95711b985d5efdaaf01c917ddd41d148b1e52a0c66b1a2e2c5c1640"
+    url "https://files.pythonhosted.org/packages/cp313/p/pyobjc_framework_cocoa/pyobjc_framework_cocoa-12.1-cp313-cp313-macosx_10_13_universal2.whl"
+    sha256 "5a3dcd491cacc2f5a197142b3c556d8aafa3963011110102a093349017705118"
   end
 
   resource "rumps" do

@@ -124,34 +124,46 @@ class OutlookNotify(rumps.App):
         super().__init__("📬", quit_button=None)
         self.config = load_config()
         self._lock = threading.Lock()
-        self._refresh_menu()
+        self._cached_folders = []
+        self._status_item = None
+        self._build_menu(refresh_folders=True)
         self._start_polling()
 
     # ── Menu ──────────────────────────────────────────────────────────────────
 
-    def _refresh_menu(self):
-        folders = get_all_folders()
+    def _build_menu(self, refresh_folders=True):
+        """
+        Rebuild the full menu. Pass refresh_folders=True to re-query Outlook.
+        On folder toggles we only update state in-place — no full rebuild needed.
+        """
+        if refresh_folders:
+            self._cached_folders = get_all_folders()
+
         with self._lock:
             watched = set(self.config["watched"])
 
-        folder_items = []
-        for name, _ in folders:
+        self._status_item = rumps.MenuItem(f"Watching {len(watched)} folder(s)")
+
+        # Build Watch Folders submenu
+        watch_sub = rumps.MenuItem("Watch Folders")
+        watch_sub.add(rumps.MenuItem("↻ Refresh List", callback=self._on_refresh_list))
+        watch_sub.add(None)  # separator
+
+        for name, _ in sorted(self._cached_folders, key=lambda x: x[0].lower()):
             item = rumps.MenuItem(name, callback=self._toggle_folder)
             item.state = 1 if name in watched else 0
-            folder_items.append(item)
+            watch_sub.add(item)
 
-        self.menu = (
-            [rumps.MenuItem("── Folders ──")]
-            + folder_items
-            + [
-                None,
-                rumps.MenuItem("Refresh Folders", callback=self._on_refresh),
-                None,
-                rumps.MenuItem(f"Watching {len(watched)} folder(s)"),
-                None,
-                rumps.MenuItem("Quit", callback=rumps.quit_application),
-            ]
-        )
+        self.menu = [
+            self._status_item,
+            None,
+            watch_sub,
+            None,
+            rumps.MenuItem("Quit", callback=rumps.quit_application),
+        ]
+
+    def _on_refresh_list(self, _):
+        self._build_menu(refresh_folders=True)
 
     def _toggle_folder(self, sender):
         with self._lock:
@@ -163,10 +175,12 @@ class OutlookNotify(rumps.App):
             else:
                 self.config["watched"].append(sender.title)
                 sender.state = 1
+            n = len(self.config["watched"])
             save_config(self.config)
 
-    def _on_refresh(self, _):
-        self._refresh_menu()
+        # Update count label in-place — submenu stays open
+        if self._status_item is not None:
+            self._status_item.title = f"Watching {n} folder(s)"
 
     # ── Polling ───────────────────────────────────────────────────────────────
 

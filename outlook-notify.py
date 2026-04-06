@@ -38,8 +38,8 @@ def notify(title, body):
 
 def get_all_folders():
     """
-    Returns list of (folder_name, unread_count) tuples from Outlook.
-    Single AppleScript call for efficiency — one round-trip regardless of folder count.
+    Returns sorted list of folder names from Outlook (no unread count needed for picker).
+    Single AppleScript call for efficiency.
     """
     script = f'''
 tell application "Microsoft Outlook"
@@ -58,7 +58,6 @@ end tell
         return []
 
     folders = []
-    # AppleScript returns a list as comma-separated items
     for item in raw.split(", "):
         item = item.strip()
         if SEPARATOR in item:
@@ -99,6 +98,47 @@ end tell
     return None, None
 
 
+def pick_folders(current_watched):
+    """
+    Opens a native macOS multi-select list dialog via AppleScript.
+    Returns the new list of selected folder names, or None if cancelled.
+    """
+    folders = get_all_folders()
+    if not folders:
+        run_applescript('display alert "Outlook is not running or has no folders." as warning')
+        return None
+
+    names = sorted([name for name, _ in folders], key=str.lower)
+
+    # Build AppleScript list literals
+    as_list = "{" + ", ".join(f'"{n}"' for n in names) + "}"
+    pre_selected = "{" + ", ".join(f'"{n}"' for n in names if n in current_watched) + "}"
+
+    script = f'''
+set result to choose from list {as_list} ¬
+    with title "Outlook Notify" ¬
+    with prompt "Select folders to watch for new mail:" ¬
+    default items {pre_selected} ¬
+    with multiple selections allowed ¬
+    with empty selection allowed
+if result is false then
+    return "CANCELLED"
+end if
+set output to ""
+repeat with i from 1 to count of result
+    if i > 1 then set output to output & "{SEPARATOR}"
+    set output to output & (item i of result)
+end repeat
+return output
+'''
+    raw = run_applescript(script)
+    if raw is None or raw == "CANCELLED":
+        return None
+    if raw == "":
+        return []
+    return [name.strip() for name in raw.split(SEPARATOR) if name.strip()]
+
+
 # ─── Config ───────────────────────────────────────────────────────────────────
 
 def load_config():
@@ -124,63 +164,40 @@ class OutlookNotify(rumps.App):
         super().__init__("📬", quit_button=None)
         self.config = load_config()
         self._lock = threading.Lock()
-        self._cached_folders = []
-        self._status_item = None
-        self._build_menu(refresh_folders=True)
-        self._start_polling()
-
-    # ── Menu ──────────────────────────────────────────────────────────────────
-
-    def _build_menu(self, refresh_folders=True):
-        """
-        Rebuild the full menu. Pass refresh_folders=True to re-query Outlook.
-        On folder toggles we only update state in-place — no full rebuild needed.
-        """
-        if refresh_folders:
-            self._cached_folders = get_all_folders()
 
         with self._lock:
-            watched = set(self.config["watched"])
+            n = len(self.config["watched"])
 
-        self._status_item = rumps.MenuItem(f"Watching {len(watched)} folder(s)")
+        self._status_item = rumps.MenuItem(f"Watching {n} folder(s)")
 
-        # Build Watch Folders submenu
-        watch_sub = rumps.MenuItem("Watch Folders")
-        watch_sub.add(rumps.MenuItem("↻ Refresh List", callback=self._on_refresh_list))
-        watch_sub.add(None)  # separator
-
-        for name, _ in sorted(self._cached_folders, key=lambda x: x[0].lower()):
-            item = rumps.MenuItem(name, callback=self._toggle_folder)
-            item.state = 1 if name in watched else 0
-            watch_sub.add(item)
-
+        # Menu is built once and never rebuilt — avoids the accumulation bug.
+        # Only _status_item.title changes over time.
         self.menu = [
             self._status_item,
             None,
-            watch_sub,
+            rumps.MenuItem("Select Folders...", callback=self._on_select_folders),
             None,
             rumps.MenuItem("Quit", callback=rumps.quit_application),
         ]
 
-    def _on_refresh_list(self, _):
-        self._build_menu(refresh_folders=True)
+        self._start_polling()
 
-    def _toggle_folder(self, sender):
+    # ── Folder picker ─────────────────────────────────────────────────────────
+
+    def _on_select_folders(self, _):
         with self._lock:
-            if sender.state:
-                self.config["watched"] = [
-                    f for f in self.config["watched"] if f != sender.title
-                ]
-                sender.state = 0
-            else:
-                self.config["watched"].append(sender.title)
-                sender.state = 1
-            n = len(self.config["watched"])
-            save_config(self.config)
+            current = set(self.config["watched"])
 
-        # Update count label in-place — submenu stays open
-        if self._status_item is not None:
-            self._status_item.title = f"Watching {n} folder(s)"
+        selected = pick_folders(current)
+        if selected is None:
+            return  # user cancelled — no change
+
+        with self._lock:
+            self.config["watched"] = selected
+            save_config(self.config)
+            n = len(selected)
+
+        self._status_item.title = f"Watching {n} folder(s)"
 
     # ── Polling ───────────────────────────────────────────────────────────────
 

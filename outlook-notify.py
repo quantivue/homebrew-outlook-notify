@@ -38,19 +38,26 @@ def notify(title, body):
 
 def get_all_folders():
     """
-    Returns sorted list of folder names from Outlook (no unread count needed for picker).
-    Single AppleScript call for efficiency.
+    Returns list of (folder_name, unread_count) tuples from Outlook.
+    Uses a breadth-first queue to recurse into subfolders — 'every mail folder'
+    alone only returns top-level folders.
     """
     script = f'''
 tell application "Microsoft Outlook"
-    set rows to {{}}
-    repeat with f in every mail folder
+    set allRows to {{}}
+    set queue to (every mail folder)
+    repeat while (count of queue) > 0
+        set f to item 1 of queue
+        set queue to rest of queue
         set n to name of f
         if n does not start with "Placeholder" then
-            set end of rows to n & "{SEPARATOR}" & (unread count of f)
+            set end of allRows to n & "{SEPARATOR}" & (unread count of f)
         end if
+        repeat with child in (mail folders of f)
+            set end of queue to child
+        end repeat
     end repeat
-    return rows
+    return allRows
 end tell
 '''
     raw = run_applescript(script)

@@ -27,8 +27,27 @@ class OutlookNotify < Formula
   end
 
   def install
-    virtualenv_install_with_resources
-    bin.install "outlook-notify.py" => "outlook-notify"
+    venv = virtualenv_create(libexec, "python@3.13")
+
+    # Install each resource — handles both .whl files and source packages
+    resources.each do |r|
+      r.stage do
+        whl = Dir["*.whl"].first
+        if whl
+          system libexec/"bin/pip", "install", "--no-deps", whl
+        else
+          system libexec/"bin/pip", "install", "--no-deps", "."
+        end
+      end
+    end
+
+    # Install the script and create a wrapper that uses the virtualenv Python
+    pkgshare.install "outlook-notify.py"
+    (bin/"outlook-notify").write <<~SH
+      #!/bin/bash
+      exec "#{libexec}/bin/python3" "#{pkgshare}/outlook-notify.py" "$@"
+    SH
+    chmod 0755, bin/"outlook-notify"
   end
 
   service do

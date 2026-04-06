@@ -20,6 +20,12 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 POLL_SECONDS = 30
 SEPARATOR = "|||"  # delimiter safe against folder names and email content
 
+# Internal Outlook stores/system folders the user never sees in the sidebar
+_SYSTEM_FOLDERS = {
+    "", "On My Computer", "Saved Messages", "Temporary Items",
+    "Auto-Saved Messages", "Outbox",
+}
+
 
 # ─── AppleScript helpers ──────────────────────────────────────────────────────
 
@@ -64,15 +70,25 @@ end tell
     if not raw:
         return []
 
+    # Parse, filter system folders, and deduplicate by name (first occurrence wins).
+    # Duplicates arise when the same folder exists under multiple accounts/stores.
+    seen = set()
     folders = []
     for item in raw.split(", "):
         item = item.strip()
-        if SEPARATOR in item:
-            name, _, count_str = item.partition(SEPARATOR)
-            try:
-                folders.append((name.strip(), int(count_str.strip())))
-            except ValueError:
-                pass
+        if SEPARATOR not in item:
+            continue
+        name, _, count_str = item.partition(SEPARATOR)
+        name = name.strip()
+        if not name or name in _SYSTEM_FOLDERS or name.startswith("Placeholder"):
+            continue
+        if name in seen:
+            continue
+        seen.add(name)
+        try:
+            folders.append((name, int(count_str.strip())))
+        except ValueError:
+            pass
     return folders
 
 

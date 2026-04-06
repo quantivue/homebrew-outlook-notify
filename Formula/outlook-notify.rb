@@ -27,8 +27,8 @@ class OutlookNotify < Formula
   end
 
   def install
-    # "python3" resolves via Homebrew PATH; without_pip:false installs pip in the venv
-    venv = virtualenv_create(libexec, "python3", without_pip: false)
+    # "python3" resolves via Homebrew PATH; pip is always included in Python 3.12+
+    venv = virtualenv_create(libexec, "python3")
 
     # Install each resource — detect .whl files and pip install them directly
     resources.each do |r|

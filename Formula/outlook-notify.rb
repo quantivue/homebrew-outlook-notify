@@ -22,8 +22,8 @@ class OutlookNotify < Formula
   end
 
   resource "rumps" do
-    url "https://files.pythonhosted.org/packages/source/r/rumps/rumps-0.4.0.tar.gz"
-    sha256 "17fb33c21b54b1e25db0d71d1d793dc19dc3c0b7d8c79dc6d833d0cffc8b1596"
+    url "https://github.com/quantivue/homebrew-outlook-notify/releases/download/v1.0.0/rumps-0.4.0-py3-none-any.whl"
+    sha256 "4da62e8598d99f84facf4d0a509dbda58b3484fcda2a88149c61ea90850c2d90"
   end
 
   def install

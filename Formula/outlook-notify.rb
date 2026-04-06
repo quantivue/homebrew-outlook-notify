@@ -42,16 +42,28 @@ class OutlookNotify < Formula
     end
 
     # macOS GUI apps must run under Python.app (framework Python) to access the
-    # window server. We use Python.app directly and prepend our venv's site-packages
-    # to PYTHONPATH so rumps and pyobjc are found instead of any system copies.
+    # window server. Environment variables like PYTHONPATH are unreliable for
+    # app bundles launched by launchd, so we embed the sys.path setup into the
+    # installed script itself — works regardless of launch mechanism.
     python_app = Formula["python@3.13"].opt_prefix/
                  "Frameworks/Python.framework/Versions/3.13/Resources/Python.app/Contents/MacOS/Python"
     site_packages = libexec/"lib/python3.13/site-packages"
 
+    # Write a bootstrap that hardcodes our site-packages into sys.path, then
+    # runs the main script as __main__ — no reliance on PYTHONPATH at all.
+    (pkgshare/"bootstrap.py").write <<~PY
+      import sys
+      _site = "#{site_packages}"
+      if _site not in sys.path:
+          sys.path.insert(0, _site)
+      import runpy
+      runpy.run_path("#{pkgshare}/outlook-notify.py", run_name="__main__")
+    PY
     pkgshare.install "outlook-notify.py"
+
     (bin/"outlook-notify").write <<~SH
       #!/bin/bash
-      PYTHONPATH="#{site_packages}${PYTHONPATH:+:$PYTHONPATH}" exec "#{python_app}" "#{pkgshare}/outlook-notify.py" "$@"
+      exec "#{python_app}" "#{pkgshare}/bootstrap.py" "$@"
     SH
     chmod 0755, bin/"outlook-notify"
   end

@@ -2,10 +2,11 @@
 # -*- coding: utf-8 -*-
 """
 Outlook Subfolder Notifier
-Watches Exchange subfolders in Outlook for Mac for new unread messages
-and fires macOS notifications — including sender and subject when available.
+Polls Exchange subfolders via Mac Mail's AppleScript API (which has full
+Exchange folder access) and fires macOS notifications when unread counts rise.
 
-Solves the gap: Outlook rules silently move mail to subfolders with no alert.
+Outlook rules silently deposit mail into subfolders — this fills that gap.
+Mail.app must be running (add it to Login Items so it starts at login).
 """
 
 import rumps
@@ -36,21 +37,33 @@ def notify(title, body):
     run_applescript(f'display notification "{b}" with title "{t}"')
 
 
-def folder_unread_count(folder_name):
-    """
-    Returns the unread count for a named folder, or None if Outlook is not
-    running or the folder doesn't exist / isn't accessible.
-    """
-    safe = folder_name.replace("\\", "\\\\").replace('"', '\\"')
-    script = f'''
-tell application "Microsoft Outlook"
+def _mail_script(inner):
+    """Wrap inner AppleScript in a Mail tell block with error handling."""
+    return f'''
+tell application "Mail"
     try
-        set f to mail folder "{safe}"
-        return unread count of f
+        {inner}
     end try
-    return -1
 end tell
 '''
+
+
+def folder_unread_count(folder_name):
+    """
+    Returns the unread count for the named mailbox in Mail.app,
+    or None if Mail isn't running or the mailbox doesn't exist.
+    """
+    safe = folder_name.replace("\\", "\\\\").replace('"', '\\"')
+    script = _mail_script(f'''
+        repeat with acct in every account
+            repeat with mbx in (every mailbox of acct)
+                if (name of mbx) is "{safe}" then
+                    return unread count of mbx
+                end if
+            end repeat
+        end repeat
+        return -1
+    ''')
     raw = run_applescript(script)
     if raw is None:
         return None
@@ -62,31 +75,36 @@ end tell
 
 
 def verify_folder(folder_name):
-    """Returns True if Outlook can find the named folder."""
+    """Returns True if Mail.app can find the named mailbox."""
     return folder_unread_count(folder_name) is not None
 
 
 def try_get_newest_unread(folder_name):
     """
-    Attempts to retrieve sender + subject of the newest unread message.
+    Retrieves sender + subject of the newest unread message via Mail.app.
     Returns (None, None) if unavailable.
     """
     safe = folder_name.replace("\\", "\\\\").replace('"', '\\"')
-    script = f'''
-tell application "Microsoft Outlook"
-    try
-        set f to mail folder "{safe}"
-        set unread_msgs to (messages of f whose is read is false)
-        if (count of unread_msgs) > 0 then
-            set m to item 1 of unread_msgs
-            set s to sender of m as string
-            set sub to subject of m as string
-            return s & "{SEPARATOR}" & sub
+    script = _mail_script(f'''
+        set targetMbx to missing value
+        repeat with acct in every account
+            repeat with mbx in (every mailbox of acct)
+                if (name of mbx) is "{safe}" then
+                    set targetMbx to mbx
+                    exit repeat
+                end if
+            end repeat
+            if targetMbx is not missing value then exit repeat
+        end repeat
+        if targetMbx is not missing value then
+            set unreadMsgs to (messages of targetMbx whose read status is false)
+            if (count of unreadMsgs) > 0 then
+                set m to item 1 of unreadMsgs
+                return (sender of m) & "{SEPARATOR}" & (subject of m)
+            end if
         end if
-    end try
-    return ""
-end tell
-'''
+        return ""
+    ''')
     raw = run_applescript(script)
     if raw and SEPARATOR in raw:
         sender, _, subject = raw.partition(SEPARATOR)
@@ -157,7 +175,7 @@ class OutlookNotify(rumps.App):
     def _on_add_folder(self, _):
         win = rumps.Window(
             title="Add Folder",
-            message="Enter the exact Outlook folder name to watch:",
+            message="Enter the exact Mail folder name to watch:",
             default_text="",
             ok="Add",
             cancel="Cancel",
@@ -176,11 +194,14 @@ class OutlookNotify(rumps.App):
                 rumps.alert(title="Already watching", message=f'"{name}" is already in your watch list.')
                 return
 
-        # Verify the folder exists in Outlook before adding
         if not verify_folder(name):
             rumps.alert(
                 title="Folder not found",
-                message=f'Outlook couldn\'t find a folder named "{name}".\n\nCheck the exact spelling — it\'s case-sensitive.',
+                message=(
+                    f'Mail couldn\'t find a folder named "{name}".\n\n'
+                    "Check the exact spelling — it's case-sensitive.\n"
+                    "Make sure Mail.app is running."
+                ),
             )
             return
 
@@ -221,7 +242,7 @@ class OutlookNotify(rumps.App):
         for name in watched:
             count = folder_unread_count(name)
             if count is None:
-                continue  # Outlook not running or folder gone
+                continue  # Mail not running or folder gone
 
             prev = last.get(name, count)
 

@@ -26,27 +26,26 @@ class OutlookNotify < Formula
 
   def install
     python = Formula["python@3.13"].opt_bin/"python3.13"
-    target = libexec/"lib/python3.13/site-packages"
-    target.mkpath
 
-    # Install each resource directly into our private site-packages
+    # Create an isolated venv directly — bypasses Homebrew's venv wrapper
+    # (no --system-site-packages so macOS pyobjc can't interfere)
+    system python, "-m", "venv", libexec
+    system libexec/"bin/python3", "-m", "ensurepip", "--upgrade"
+
+    # Install each resource into the isolated venv
     resources.each do |r|
       r.stage do
         whl = Dir["*.whl"].first
         pkg = whl || "."
-        system python, "-m", "pip", "install",
-               "--no-deps", "--no-index",
-               "--target=#{target}",
-               "--no-warn-script-location",
-               pkg
+        system libexec/"bin/pip3", "install", "--no-deps", "--no-index", pkg
       end
     end
 
-    # Install script and a wrapper that puts our packages on PYTHONPATH
+    # Install script; wrapper invokes the venv's Python directly
     pkgshare.install "outlook-notify.py"
     (bin/"outlook-notify").write <<~SH
       #!/bin/bash
-      PYTHONPATH="#{target}" exec "#{python}" "#{pkgshare}/outlook-notify.py" "$@"
+      exec "#{libexec}/bin/python3" "#{pkgshare}/outlook-notify.py" "$@"
     SH
     chmod 0755, bin/"outlook-notify"
   end

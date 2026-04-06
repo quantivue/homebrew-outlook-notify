@@ -27,21 +27,22 @@ class OutlookNotify < Formula
   end
 
   def install
-    venv = virtualenv_create(libexec, "python@3.13")
+    # "python3" resolves via Homebrew PATH; without_pip:false installs pip in the venv
+    venv = virtualenv_create(libexec, "python3", without_pip: false)
 
-    # Install each resource — handles both .whl files and source packages
+    # Install each resource — detect .whl files and pip install them directly
     resources.each do |r|
       r.stage do
         whl = Dir["*.whl"].first
         if whl
-          system libexec/"bin/pip", "install", "--no-deps", whl
+          system libexec/"bin/pip3", "install", "--no-deps", whl
         else
-          system libexec/"bin/pip", "install", "--no-deps", "."
+          system libexec/"bin/pip3", "install", "--no-deps", "."
         end
       end
     end
 
-    # Install the script and create a wrapper that uses the virtualenv Python
+    # Install the script and a wrapper that invokes the virtualenv Python
     pkgshare.install "outlook-notify.py"
     (bin/"outlook-notify").write <<~SH
       #!/bin/bash

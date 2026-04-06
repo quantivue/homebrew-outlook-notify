@@ -61,6 +61,8 @@ class OutlookNotify < Formula
     keep_alive true
     log_path var/"log/outlook-notify.log"
     error_log_path var/"log/outlook-notify.err"
+    # Set PYTHONPATH in the launchd plist itself — more reliable than shell wrapper
+    environment_variables PYTHONPATH: "#{opt_prefix}/libexec/lib/python3.13/site-packages"
   end
 
   def caveats

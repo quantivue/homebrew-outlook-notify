@@ -18,13 +18,7 @@ import time
 CONFIG_DIR = os.path.expanduser("~/.config/outlook-notify")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 POLL_SECONDS = 30
-SEPARATOR = "|||"  # delimiter safe against folder names and email content
-
-# Internal Outlook stores/system folders the user never sees in the sidebar
-_SYSTEM_FOLDERS = {
-    "", "On My Computer", "Saved Messages", "Temporary Items",
-    "Auto-Saved Messages", "Outbox",
-}
+SEPARATOR = "|||"
 
 
 # ─── AppleScript helpers ──────────────────────────────────────────────────────
@@ -42,67 +36,46 @@ def notify(title, body):
     run_applescript(f'display notification "{b}" with title "{t}"')
 
 
-def get_all_folders():
+def folder_unread_count(folder_name):
     """
-    Returns list of (folder_name, unread_count) tuples from Outlook.
-    Uses a breadth-first queue to recurse into subfolders — 'every mail folder'
-    alone only returns top-level folders.
+    Returns the unread count for a named folder, or None if Outlook is not
+    running or the folder doesn't exist / isn't accessible.
     """
+    safe = folder_name.replace("\\", "\\\\").replace('"', '\\"')
     script = f'''
 tell application "Microsoft Outlook"
-    set allRows to {{}}
-    set queue to (every mail folder)
-    repeat while (count of queue) > 0
-        set f to item 1 of queue
-        set queue to rest of queue
-        set n to name of f
-        if n does not start with "Placeholder" then
-            set end of allRows to n & "{SEPARATOR}" & (unread count of f)
-        end if
-        repeat with child in (mail folders of f)
-            set end of queue to child
-        end repeat
-    end repeat
-    return allRows
+    try
+        set f to mail folder "{safe}"
+        return unread count of f
+    end try
+    return -1
 end tell
 '''
     raw = run_applescript(script)
-    if not raw:
-        return []
+    if raw is None:
+        return None
+    try:
+        val = int(raw)
+        return None if val == -1 else val
+    except ValueError:
+        return None
 
-    # Parse, filter system folders, and deduplicate by name (first occurrence wins).
-    # Duplicates arise when the same folder exists under multiple accounts/stores.
-    seen = set()
-    folders = []
-    for item in raw.split(", "):
-        item = item.strip()
-        if SEPARATOR not in item:
-            continue
-        name, _, count_str = item.partition(SEPARATOR)
-        name = name.strip()
-        if not name or name in _SYSTEM_FOLDERS or name.startswith("Placeholder"):
-            continue
-        if name in seen:
-            continue
-        seen.add(name)
-        try:
-            folders.append((name, int(count_str.strip())))
-        except ValueError:
-            pass
-    return folders
+
+def verify_folder(folder_name):
+    """Returns True if Outlook can find the named folder."""
+    return folder_unread_count(folder_name) is not None
 
 
 def try_get_newest_unread(folder_name):
     """
     Attempts to retrieve sender + subject of the newest unread message.
-    New Outlook for Mac doesn't always populate message objects via AppleScript,
-    so this may return (None, None) — handled gracefully by callers.
+    Returns (None, None) if unavailable.
     """
-    safe_name = folder_name.replace("\\", "\\\\").replace('"', '\\"')
+    safe = folder_name.replace("\\", "\\\\").replace('"', '\\"')
     script = f'''
 tell application "Microsoft Outlook"
     try
-        set f to mail folder "{safe_name}"
+        set f to mail folder "{safe}"
         set unread_msgs to (messages of f whose is read is false)
         if (count of unread_msgs) > 0 then
             set m to item 1 of unread_msgs
@@ -119,47 +92,6 @@ end tell
         sender, _, subject = raw.partition(SEPARATOR)
         return sender.strip(), subject.strip()
     return None, None
-
-
-def pick_folders(current_watched):
-    """
-    Opens a native macOS multi-select list dialog via AppleScript.
-    Returns the new list of selected folder names, or None if cancelled.
-    """
-    folders = get_all_folders()
-    if not folders:
-        run_applescript('display alert "Outlook is not running or has no folders." as warning')
-        return None
-
-    names = sorted([name for name, _ in folders], key=str.lower)
-
-    # Build AppleScript list literals
-    as_list = "{" + ", ".join(f'"{n}"' for n in names) + "}"
-    pre_selected = "{" + ", ".join(f'"{n}"' for n in names if n in current_watched) + "}"
-
-    script = f'''
-set result to choose from list {as_list} ¬
-    with title "Outlook Notify" ¬
-    with prompt "Select folders to watch for new mail:" ¬
-    default items {pre_selected} ¬
-    with multiple selections allowed ¬
-    with empty selection allowed
-if result is false then
-    return "CANCELLED"
-end if
-set output to ""
-repeat with i from 1 to count of result
-    if i > 1 then set output to output & "{SEPARATOR}"
-    set output to output & (item i of result)
-end repeat
-return output
-'''
-    raw = run_applescript(script)
-    if raw is None or raw == "CANCELLED":
-        return None
-    if raw == "":
-        return []
-    return [name.strip() for name in raw.split(SEPARATOR) if name.strip()]
 
 
 # ─── Config ───────────────────────────────────────────────────────────────────
@@ -187,40 +119,76 @@ class OutlookNotify(rumps.App):
         super().__init__("📬", quit_button=None)
         self.config = load_config()
         self._lock = threading.Lock()
+        self._build_menu()
+        self._start_polling()
 
+    # ── Menu ──────────────────────────────────────────────────────────────────
+
+    def _build_menu(self):
         with self._lock:
-            n = len(self.config["watched"])
+            watched = list(self.config["watched"])
 
-        self._status_item = rumps.MenuItem(f"Watching {n} folder(s)")
+        self._status_item = rumps.MenuItem(f"Watching {len(watched)} folder(s)")
 
-        # Menu is built once and never rebuilt — avoids the accumulation bug.
-        # Only _status_item.title changes over time.
-        self.menu = [
-            self._status_item,
-            None,
-            rumps.MenuItem("Select Folders...", callback=self._on_select_folders),
+        watched_items = []
+        for name in watched:
+            item = rumps.MenuItem(f"✓ {name}", callback=self._remove_folder)
+            item._folder_name = name
+            watched_items.append(item)
+
+        items = [self._status_item, None]
+        if watched_items:
+            items += watched_items + [None]
+        items += [
+            rumps.MenuItem("Add Folder...", callback=self._on_add_folder),
             None,
             rumps.MenuItem("Quit", callback=rumps.quit_application),
         ]
 
-        self._start_polling()
+        self.menu = items
 
-    # ── Folder picker ─────────────────────────────────────────────────────────
-
-    def _on_select_folders(self, _):
+    def _remove_folder(self, sender):
+        name = sender._folder_name
         with self._lock:
-            current = set(self.config["watched"])
-
-        selected = pick_folders(current)
-        if selected is None:
-            return  # user cancelled — no change
-
-        with self._lock:
-            self.config["watched"] = selected
+            self.config["watched"] = [f for f in self.config["watched"] if f != name]
             save_config(self.config)
-            n = len(selected)
+        self._build_menu()
 
-        self._status_item.title = f"Watching {n} folder(s)"
+    def _on_add_folder(self, _):
+        win = rumps.Window(
+            title="Add Folder",
+            message="Enter the exact Outlook folder name to watch:",
+            default_text="",
+            ok="Add",
+            cancel="Cancel",
+            dimensions=(300, 24),
+        )
+        response = win.run()
+        if not response.clicked:
+            return
+
+        name = response.text.strip()
+        if not name:
+            return
+
+        with self._lock:
+            if name in self.config["watched"]:
+                rumps.alert(title="Already watching", message=f'"{name}" is already in your watch list.')
+                return
+
+        # Verify the folder exists in Outlook before adding
+        if not verify_folder(name):
+            rumps.alert(
+                title="Folder not found",
+                message=f'Outlook couldn\'t find a folder named "{name}".\n\nCheck the exact spelling — it\'s case-sensitive.',
+            )
+            return
+
+        with self._lock:
+            self.config["watched"].append(name)
+            save_config(self.config)
+
+        self._build_menu()
 
     # ── Polling ───────────────────────────────────────────────────────────────
 
@@ -229,11 +197,16 @@ class OutlookNotify(rumps.App):
         t.start()
 
     def _poll_loop(self):
-        # Seed counts on first run so we don't spam on startup
-        folders = get_all_folders()
+        # Seed counts so we don't spam notifications on startup
         with self._lock:
-            for name, count in folders:
-                self.config["last_counts"].setdefault(name, count)
+            watched = list(self.config["watched"])
+
+        for name in watched:
+            count = folder_unread_count(name)
+            if count is not None:
+                with self._lock:
+                    self.config["last_counts"].setdefault(name, count)
+        with self._lock:
             save_config(self.config)
 
         while True:
@@ -241,18 +214,18 @@ class OutlookNotify(rumps.App):
             self._check_new_mail()
 
     def _check_new_mail(self):
-        folders = get_all_folders()
-        if not folders:
-            return  # Outlook not running or AppleScript failed
-
         with self._lock:
-            watched = set(self.config["watched"])
+            watched = list(self.config["watched"])
             last = dict(self.config["last_counts"])
 
-        for name, count in folders:
+        for name in watched:
+            count = folder_unread_count(name)
+            if count is None:
+                continue  # Outlook not running or folder gone
+
             prev = last.get(name, count)
 
-            if name in watched and count > prev:
+            if count > prev:
                 delta = count - prev
                 sender, subject = try_get_newest_unread(name)
 

@@ -1,6 +1,4 @@
 class OutlookNotify < Formula
-  include Language::Python::Virtualenv
-
   desc "Menu bar notifier for Outlook subfolder emails on macOS"
   homepage "https://github.com/quantivue/homebrew-outlook-notify"
   url "https://github.com/quantivue/homebrew-outlook-notify/archive/refs/tags/v1.0.0.tar.gz"
@@ -10,7 +8,7 @@ class OutlookNotify < Formula
   depends_on "python@3.13"
   depends_on :macos
 
-  # Pre-compiled universal2 wheels — no Xcode required
+  # Pre-compiled universal2 wheels — no Xcode or compilation required
   resource "pyobjc-core" do
     url "https://files.pythonhosted.org/packages/cp313/p/pyobjc_core/pyobjc_core-12.1-cp313-cp313-macosx_10_13_universal2.whl"
     sha256 "01c0cf500596f03e21c23aef9b5f326b9fb1f8f118cf0d8b66749b6cf4cbb37a"
@@ -27,26 +25,28 @@ class OutlookNotify < Formula
   end
 
   def install
-    # "python3" resolves via Homebrew PATH; pip is always included in Python 3.12+
-    venv = virtualenv_create(libexec, "python3")
+    python = Formula["python@3.13"].opt_bin/"python3.13"
+    target = libexec/"lib/python3.13/site-packages"
+    target.mkpath
 
-    # Install each resource — detect .whl files and pip install them directly
+    # Install each resource directly into our private site-packages
     resources.each do |r|
       r.stage do
         whl = Dir["*.whl"].first
-        if whl
-          system libexec/"bin/pip3", "install", "--no-deps", whl
-        else
-          system libexec/"bin/pip3", "install", "--no-deps", "."
-        end
+        pkg = whl || "."
+        system python, "-m", "pip", "install",
+               "--no-deps", "--no-index",
+               "--target=#{target}",
+               "--no-warn-script-location",
+               pkg
       end
     end
 
-    # Install the script and a wrapper that invokes the virtualenv Python
+    # Install script and a wrapper that puts our packages on PYTHONPATH
     pkgshare.install "outlook-notify.py"
     (bin/"outlook-notify").write <<~SH
       #!/bin/bash
-      exec "#{libexec}/bin/python3" "#{pkgshare}/outlook-notify.py" "$@"
+      PYTHONPATH="#{target}" exec "#{python}" "#{pkgshare}/outlook-notify.py" "$@"
     SH
     chmod 0755, bin/"outlook-notify"
   end

@@ -144,6 +144,9 @@ class OutlookNotify(rumps.App):
         super().__init__("📬", quit_button=None)
         self.config = load_config()
         self._lock = threading.Lock()
+        self._status_item = None
+        # Seed with an empty list so rumps initialises self.menu before _build_menu
+        self.menu = []
         self._build_menu()
         self._start_polling()
 
@@ -153,24 +156,24 @@ class OutlookNotify(rumps.App):
         with self._lock:
             watched = list(self.config["watched"])
 
-        self._status_item = rumps.MenuItem(f"Watching {len(watched)} folder(s)")
+        # Clear all existing menu items before rebuilding — prevents accumulation
+        self.menu.clear()
 
-        watched_items = []
+        self._status_item = rumps.MenuItem(f"Watching {len(watched)} folder(s)")
+        self.menu.add(self._status_item)
+        self.menu.add(rumps.separator)
+
         for name in watched:
             item = rumps.MenuItem(f"✓ {name}", callback=self._remove_folder)
             item._folder_name = name
-            watched_items.append(item)
+            self.menu.add(item)
 
-        items = [self._status_item, None]
-        if watched_items:
-            items += watched_items + [None]
-        items += [
-            rumps.MenuItem("Add Folder...", callback=self._on_add_folder),
-            None,
-            rumps.MenuItem("Quit", callback=rumps.quit_application),
-        ]
+        if watched:
+            self.menu.add(rumps.separator)
 
-        self.menu = items
+        self.menu.add(rumps.MenuItem("Add Folder...", callback=self._on_add_folder))
+        self.menu.add(rumps.separator)
+        self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
     def _remove_folder(self, sender):
         name = sender._folder_name

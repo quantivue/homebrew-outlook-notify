@@ -22,7 +22,7 @@ POLL_SECONDS = 30
 SEPARATOR = "|||"
 
 
-# ─── AppleScript helpers ──────────────────────────────────────────────────────
+# ─── AppleScript helper ───────────────────────────────────────────────────────
 
 def run_applescript(script):
     result = subprocess.run(["osascript", "-e", script], capture_output=True, text=True)
@@ -31,10 +31,17 @@ def run_applescript(script):
     return None
 
 
+# ─── Notification helpers ─────────────────────────────────────────────────────
+
+
 def notify(title, body):
-    t = title.replace("\\", "\\\\").replace('"', '\\"')
-    b = body.replace("\\", "\\\\").replace('"', '\\"')
-    run_applescript(f'display notification "{b}" with title "{t}"')
+    subprocess.Popen([
+        "terminal-notifier",
+        "-title", title,
+        "-message", body,
+        "-sender", "com.apple.mail",
+        "-sound", "default",
+    ])
 
 
 def _mail_script(inner):

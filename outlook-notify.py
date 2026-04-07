@@ -36,7 +36,7 @@ def run_applescript(script):
 
 def notify(title, body):
     subprocess.Popen([
-        "terminal-notifier",
+        "/opt/homebrew/bin/terminal-notifier",
         "-title", title,
         "-message", body,
         "-sender", "com.apple.mail",

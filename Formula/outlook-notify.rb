@@ -6,6 +6,7 @@ class OutlookNotify < Formula
   license "MIT"
 
   depends_on "python@3.13"
+  depends_on "terminal-notifier"
   depends_on :macos
 
   # Pre-compiled universal2 wheels — no Xcode or compilation required
@@ -87,7 +88,8 @@ class OutlookNotify < Formula
     <<~EOS
       After installing, select folders to watch from the 📬 menu bar icon.
 
-      Outlook must be running for notifications to work (it handles Exchange sync).
+      Mail.app must be running (it provides Exchange folder access via AppleScript).
+      Add Mail.app to Login Items so it starts automatically at login.
 
       Manage the service:
         brew services start outlook-notify

@@ -10,6 +10,7 @@ Mail.app must be running (add it to Login Items so it starts at login).
 """
 
 import rumps
+import shutil
 import subprocess
 import json
 import os
@@ -20,6 +21,20 @@ CONFIG_DIR = os.path.expanduser("~/.config/outlook-notify")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 POLL_SECONDS = 30
 SEPARATOR = "|||"
+RECORD_SEP = "^^^"
+
+# Resolve terminal-notifier once at import time.  shutil.which works when
+# launched from a shell; the fallback paths cover launchd (no PATH inherited).
+NOTIFIER_BIN = (
+    shutil.which("terminal-notifier")
+    or next(
+        (p for p in [
+            "/opt/homebrew/bin/terminal-notifier",   # Apple Silicon
+            "/usr/local/bin/terminal-notifier",       # Intel
+        ] if os.path.isfile(p)),
+        None,
+    )
+)
 
 
 # ─── AppleScript helper ───────────────────────────────────────────────────────
@@ -35,13 +50,18 @@ def run_applescript(script):
 
 
 def notify(title, body):
-    subprocess.Popen([
-        "/opt/homebrew/bin/terminal-notifier",
-        "-title", title,
-        "-message", body,
-        "-sender", "com.apple.mail",
-        "-sound", "default",
-    ])
+    if NOTIFIER_BIN is None:
+        return
+    try:
+        subprocess.Popen([
+            NOTIFIER_BIN,
+            "-title", title,
+            "-message", body,
+            "-sender", "com.apple.mail",
+            "-sound", "default",
+        ])
+    except OSError:
+        pass  # binary vanished after startup — silently skip
 
 
 def _mail_script(inner):
@@ -79,6 +99,44 @@ def folder_unread_count(folder_name):
         return None if val == -1 else val
     except ValueError:
         return None
+
+
+def batch_unread_counts(folder_names):
+    """
+    Returns {folder_name: int} for all folders in a single osascript call.
+    Folders that don't exist in Mail are omitted from the result.
+    """
+    if not folder_names:
+        return {}
+    # Build an AppleScript list literal of the target names
+    safe_names = [n.replace("\\", "\\\\").replace('"', '\\"') for n in folder_names]
+    as_list = ", ".join(f'"{s}"' for s in safe_names)
+    script = _mail_script(f'''
+        set targets to {{{as_list}}}
+        set results to ""
+        repeat with acct in every account
+            repeat with mbx in (every mailbox of acct)
+                set mName to (name of mbx) as text
+                if mName is in targets then
+                    set cnt to unread count of mbx
+                    set results to results & mName & "{SEPARATOR}" & (cnt as text) & "{RECORD_SEP}"
+                end if
+            end repeat
+        end repeat
+        return results
+    ''')
+    raw = run_applescript(script)
+    if not raw:
+        return {}
+    counts = {}
+    for record in raw.split(RECORD_SEP):
+        if SEPARATOR in record:
+            name, _, cnt_str = record.partition(SEPARATOR)
+            try:
+                counts[name.strip()] = int(cnt_str.strip())
+            except ValueError:
+                pass
+    return counts
 
 
 def verify_folder(folder_name):
@@ -232,12 +290,10 @@ class OutlookNotify(rumps.App):
         with self._lock:
             watched = list(self.config["watched"])
 
-        for name in watched:
-            count = folder_unread_count(name)
-            if count is not None:
-                with self._lock:
-                    self.config["last_counts"].setdefault(name, count)
+        counts = batch_unread_counts(watched)
         with self._lock:
+            for name, count in counts.items():
+                self.config["last_counts"].setdefault(name, count)
             save_config(self.config)
 
         while True:
@@ -249,8 +305,12 @@ class OutlookNotify(rumps.App):
             watched = list(self.config["watched"])
             last = dict(self.config["last_counts"])
 
+        # Single osascript call for all folders instead of one per folder
+        counts = batch_unread_counts(watched)
+        changed = False
+
         for name in watched:
-            count = folder_unread_count(name)
+            count = counts.get(name)
             if count is None:
                 continue  # Mail not running or folder gone
 
@@ -267,11 +327,16 @@ class OutlookNotify(rumps.App):
 
                 notify(f"📬 {name}", body)
 
+            if last.get(name) != count:
+                changed = True
             last[name] = count
 
-        with self._lock:
-            self.config["last_counts"] = last
-            save_config(self.config)
+        if changed:
+            with self._lock:
+                # Merge rather than replace — preserves counts for folders
+                # added by another thread while we were polling
+                self.config["last_counts"].update(last)
+                save_config(self.config)
 
 
 if __name__ == "__main__":

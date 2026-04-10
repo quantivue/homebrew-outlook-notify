@@ -1,8 +1,8 @@
 class OutlookNotify < Formula
   desc "Menu bar notifier for Outlook subfolder emails on macOS"
   homepage "https://github.com/quantivue/homebrew-outlook-notify"
-  url "https://github.com/quantivue/homebrew-outlook-notify/archive/refs/tags/v1.1.0.tar.gz"
-  sha256 "fae3d7bb5fab06cd5c9a35c56355f82e03bfcc1b49b42e95495ebfd31328bbce"
+  url "https://github.com/quantivue/homebrew-outlook-notify/archive/refs/tags/v1.2.0.tar.gz"
+  sha256 "960bbd06297b2240cc3f005cc2c373d897676f6f7db0b502f8798e5cd0105528"
   license "MIT"
 
   depends_on "python@3.13"

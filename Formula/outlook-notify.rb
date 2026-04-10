@@ -6,7 +6,6 @@ class OutlookNotify < Formula
   license "MIT"
 
   depends_on "python@3.13"
-  depends_on "terminal-notifier"
   depends_on :macos
 
   # Pre-compiled universal2 wheels — no Xcode or compilation required
@@ -18,6 +17,11 @@ class OutlookNotify < Formula
   resource "pyobjc-framework-Cocoa" do
     url "https://files.pythonhosted.org/packages/cp313/p/pyobjc_framework_cocoa/pyobjc_framework_cocoa-12.1-cp313-cp313-macosx_10_13_universal2.whl"
     sha256 "5a3dcd491cacc2f5a197142b3c556d8aafa3963011110102a093349017705118"
+  end
+
+  resource "pyobjc-framework-UserNotifications" do
+    url "https://files.pythonhosted.org/packages/b1/cc/4c6efe6a65b1742ea238734f81509ceba5346b45f605baa809ca63f30692/pyobjc_framework_usernotifications-12.1-cp313-cp313-macosx_10_13_universal2.whl"
+    sha256 "40a5457f4157ca007f80f0644413f44f0dc141f7864b28e1728623baf56a8539"
   end
 
   resource "rumps" do

@@ -10,31 +10,20 @@ Mail.app must be running (add it to Login Items so it starts at login).
 """
 
 import rumps
-import shutil
 import subprocess
 import json
 import os
 import threading
 import time
+import uuid
+
+import UserNotifications
 
 CONFIG_DIR = os.path.expanduser("~/.config/outlook-notify")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 POLL_SECONDS = 30
 SEPARATOR = "|||"
 RECORD_SEP = "^^^"
-
-# Resolve terminal-notifier once at import time.  shutil.which works when
-# launched from a shell; the fallback paths cover launchd (no PATH inherited).
-NOTIFIER_BIN = (
-    shutil.which("terminal-notifier")
-    or next(
-        (p for p in [
-            "/opt/homebrew/bin/terminal-notifier",   # Apple Silicon
-            "/usr/local/bin/terminal-notifier",       # Intel
-        ] if os.path.isfile(p)),
-        None,
-    )
-)
 
 
 # ─── AppleScript helper ───────────────────────────────────────────────────────
@@ -48,20 +37,49 @@ def run_applescript(script):
 
 # ─── Notification helpers ─────────────────────────────────────────────────────
 
+_notification_center = None
+
+
+def _get_notification_center():
+    """Lazily initialise and authorise UNUserNotificationCenter."""
+    global _notification_center
+    if _notification_center is not None:
+        return _notification_center
+
+    center = UserNotifications.UNUserNotificationCenter.currentNotificationCenter()
+
+    # Request authorization (no-op after first grant; completes instantly)
+    done = threading.Event()
+    def _auth(granted, error):
+        done.set()
+    center.requestAuthorizationWithOptions_completionHandler_(
+        UserNotifications.UNAuthorizationOptionAlert
+        | UserNotifications.UNAuthorizationOptionSound,
+        _auth,
+    )
+    done.wait(timeout=10)
+
+    _notification_center = center
+    return center
+
 
 def notify(title, body):
-    if NOTIFIER_BIN is None:
-        return
     try:
-        subprocess.Popen([
-            NOTIFIER_BIN,
-            "-title", title,
-            "-message", body,
-            "-sender", "com.apple.mail",
-            "-sound", "default",
-        ])
-    except OSError:
-        pass  # binary vanished after startup — silently skip
+        center = _get_notification_center()
+
+        content = UserNotifications.UNMutableNotificationContent.alloc().init()
+        content.setTitle_(title)
+        content.setBody_(body)
+        content.setSound_(UserNotifications.UNNotificationSound.defaultSound())
+
+        request = UserNotifications.UNNotificationRequest \
+            .requestWithIdentifier_content_trigger_(
+                str(uuid.uuid4()), content, None,
+            )
+
+        center.addNotificationRequest_withCompletionHandler_(request, None)
+    except Exception:
+        pass  # never crash the polling thread over a notification
 
 
 def _mail_script(inner):

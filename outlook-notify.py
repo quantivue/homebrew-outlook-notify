@@ -11,6 +11,7 @@ Mail.app must be running (add it to Login Items so it starts at login).
 
 import rumps
 import subprocess
+import glob
 import json
 import os
 import threading
@@ -24,6 +25,23 @@ CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
 POLL_SECONDS = 30
 SEPARATOR = "|||"
 RECORD_SEP = "^^^"
+
+
+def _discover_sounds():
+    """Return sorted list of available sound names from system and user dirs."""
+    sound_dirs = [
+        "/System/Library/Sounds",
+        "/Library/Sounds",
+        os.path.expanduser("~/Library/Sounds"),
+    ]
+    paths = []
+    for d in sound_dirs:
+        for ext in ("*.aiff", "*.wav", "*.caf"):
+            paths.extend(glob.glob(os.path.join(d, ext)))
+    return sorted(set(os.path.splitext(os.path.basename(p))[0] for p in paths))
+
+
+AVAILABLE_SOUNDS = _discover_sounds()
 
 
 # ─── AppleScript helper ───────────────────────────────────────────────────────
@@ -63,14 +81,21 @@ def _get_notification_center():
     return center
 
 
-def notify(title, body):
+def _make_sound(name):
+    """Create a UNNotificationSound from a sound name."""
+    if name == "default":
+        return UserNotifications.UNNotificationSound.defaultSound()
+    return UserNotifications.UNNotificationSound.soundNamed_(name)
+
+
+def notify(title, body, sound="default"):
     try:
         center = _get_notification_center()
 
         content = UserNotifications.UNMutableNotificationContent.alloc().init()
         content.setTitle_(title)
         content.setBody_(body)
-        content.setSound_(UserNotifications.UNNotificationSound.defaultSound())
+        content.setSound_(_make_sound(sound))
 
         request = UserNotifications.UNNotificationRequest \
             .requestWithIdentifier_content_trigger_(
@@ -204,7 +229,7 @@ def load_config():
                 return json.load(f)
         except Exception:
             pass
-    return {"watched": [], "last_counts": {}}
+    return {"watched": [], "last_counts": {}, "sound": "default"}
 
 
 def save_config(config):
@@ -248,6 +273,29 @@ class OutlookNotify(rumps.App):
             self.menu.add(rumps.separator)
 
         self.menu.add(rumps.MenuItem("Add Folder...", callback=self._on_add_folder))
+        self.menu.add(rumps.separator)
+
+        # ── Sound submenu ────────────────────────────────────────────────────
+        with self._lock:
+            current_sound = self.config.get("sound", "default")
+
+        sound_menu = rumps.MenuItem("Sound")
+        # "Default" entry
+        default_item = rumps.MenuItem(
+            f"{'✓ ' if current_sound == 'default' else '  '}Default",
+            callback=self._on_sound_pick,
+        )
+        default_item._sound_name = "default"
+        sound_menu.add(default_item)
+        sound_menu.add(rumps.separator)
+        # System / user sounds
+        for sname in AVAILABLE_SOUNDS:
+            prefix = "✓ " if current_sound == sname else "  "
+            item = rumps.MenuItem(f"{prefix}{sname}", callback=self._on_sound_pick)
+            item._sound_name = sname
+            sound_menu.add(item)
+        self.menu.add(sound_menu)
+
         self.menu.add(rumps.separator)
         self.menu.add(rumps.MenuItem("Quit", callback=rumps.quit_application))
 
@@ -297,6 +345,13 @@ class OutlookNotify(rumps.App):
 
         self._build_menu()
 
+    def _on_sound_pick(self, sender):
+        name = sender._sound_name
+        with self._lock:
+            self.config["sound"] = name
+            save_config(self.config)
+        self._build_menu()
+
     # ── Polling ───────────────────────────────────────────────────────────────
 
     def _start_polling(self):
@@ -343,7 +398,9 @@ class OutlookNotify(rumps.App):
                 else:
                     body = f"{delta} new message{'s' if delta > 1 else ''}"
 
-                notify(f"📬 {name}", body)
+                with self._lock:
+                    sound = self.config.get("sound", "default")
+                notify(f"📬 {name}", body, sound=sound)
 
             if last.get(name) != count:
                 changed = True
